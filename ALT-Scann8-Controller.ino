@@ -181,15 +181,17 @@ int LastPTLevel = 0;                        // Stores last PT level (stats only)
 
 boolean IsS8 = true;
 
-boolean TractionSwitchActive = false;  // When traction micro-switch is closed
-boolean TractionSwitchActiveLast = false;  // Last value of traction micro-switch, to detect changes
-unsigned long TractionSwitchTimeLimit = 0; // Last time traction switch was active, to detect changes
+boolean TractionSwitchActive = true;  // When traction micro-switch is closed
 
 unsigned long StartFrameTime = 0;           // Time at which we get RPi command to get next frame (stats only)
 unsigned long StartPictureSaveTime = 0;     // Time at which we tell RPi to save current frame (stats only)
 unsigned long FilmDetectedTime = 0;         // Updated when film is present (relevant PT variation)
 bool NoFilmDetected = false;
-int MaxFilmStallTime = 6000;                // Maximum time film can be undetected to report end of reel
+int MaxFilmStallTime = 6000;
+unsigned long lastSwitchChange = 0;
+bool switchStateBackup = true;
+bool switchTimeoutSent = false;
+                // Maximum time film can be undetected to report end of reel
 
 byte BufferForRPi[9];   // 9 byte array to send data to Raspberry Pi over I2C bus
 
@@ -231,7 +233,12 @@ void SendToRPi(byte rsp, int param1, int param2)
 void(* resetFunc) (void) = 0;//declare reset function at address 0
 
 void setup() {
-    // Possible serial speeds: 1200, 2400, 4800, 9600, 19200, 38400, 57600,74880, 115200, 230400, 250000, 500000, 1000000, 2000000
+    
+    // Microswitch timeout initialization
+                        switchStateBackup = digitalRead(TractionStopPin);
+                        lastSwitchChange = millis();
+                        switchTimeoutSent = false;
+// Possible serial speeds: 1200, 2400, 4800, 9600, 19200, 38400, 57600,74880, 115200, 230400, 250000, 500000, 1000000, 2000000
     Serial.begin(1000000);  // As fast as possible for debug, otherwise it slows down execution
   
     Wire.begin(16);  // join I2c bus with address #16
@@ -458,6 +465,11 @@ void loop() {
                         delay(100);     // Delay to avoind beep interfering with uv led PWB (both use same timer)
                         SetReelsAsNeutral(HIGH, LOW, LOW);
                         DebugPrintStr(">Scan start");
+                        
+                        // Reset watchdog timer at scan start (posizione corretta, per tutte le modalità)
+                        switchStateBackup = digitalRead(TractionStopPin);
+                        lastSwitchChange = millis();
+                        switchTimeoutSent = false;
                         digitalWrite(MotorB_Direction, HIGH);    // Set as clockwise, just in case
                         VFD_mode_active = param;
                         if (!VFD_mode_active) {   // Traditional mode with phototransistor detection, go to dedicated state
@@ -469,7 +481,6 @@ void loop() {
                         }
                         analogWrite(11, UVLedBrightness); // Turn on UV LED
                         UVLedOn = true;
-                        TractionSwitchTimeLimit = millis() + MaxFilmStallTime; // Traction switch last time initialize
                         scan_process_ongoing = true;
                         delay(50);     // Wait for PT to stabilize after switching UV led on
                         collect_timer = scan_collect_timer;
@@ -527,7 +538,6 @@ void loop() {
                         collect_timer = 500;
                         analogWrite(11, UVLedBrightness); // Turn on UV LED
                         UVLedOn = true;
-                        TractionSwitchTimeLimit = millis() + MaxFilmStallTime; // Traction switch last time initialize
                         ScanState = Sts_SlowForward;
                         digitalWrite(MotorB_Direction, HIGH);    // Set as clockwise, just in case
                         delay(50);
@@ -807,10 +817,6 @@ void CollectOutgoingFilm(void) {
     }
     else {
         TractionSwitchActive = digitalRead(TractionStopPin);
-        if (TractionSwitchActiveLast != TractionSwitchActive) {  // Traction switch changed state
-            TractionSwitchTimeLimit = CurrentTime + MaxFilmStallTime;
-            TractionSwitchActiveLast = TractionSwitchActive;
-        }
         if (!TractionSwitchActive) {  //Motor allowed to turn
             digitalWrite(MotorC_Stepper, LOW);
             digitalWrite(MotorC_Stepper, HIGH);
@@ -856,7 +862,7 @@ boolean film_detected(int pt_value)
     min_value = min(min_value, pt_value);
 
     instant_variance = max_value - min_value;
-    if (instant_variance > 50)
+    if (instant_variance > 30)
         return(true);
     else
         return(false);
@@ -884,14 +890,15 @@ int GetLevelPT() {
     }
 
     // If relevant diff between max/min dinamic it means we have film passing by
-    /*
     if (CurrentTime > FilmDetectedTime) {
         NoFilmDetected = true;
+    }
+    else if (FilmDetectedTime - CurrentTime > MaxFilmStallTime) { // Overrun: Normalize value
+        FilmDetectedTime = millis() + MaxFilmStallTime;
     }
     else if (film_detected(PT_SignalLevelRead)) {
         FilmDetectedTime = millis() + MaxFilmStallTime;
     }
-    */
 
     return(PT_SignalLevelRead);
 }
@@ -928,8 +935,7 @@ boolean SlowForward(){
         LastMove = CurrentTime + 400;
     }
     // Check if film still present (auto stop at end of reel)
-    //if (AutoStopEnabled && NoFilmDetected) {
-    if (AutoStopEnabled && millis() > TractionSwitchTimeLimit) {
+    if (AutoStopEnabled && NoFilmDetected) {
         SendToRPi(RSP_FILM_FORWARD_ENDED, 0, 0);
         return(false);
     }
@@ -1081,11 +1087,22 @@ ScanResult scan(int UI_Command) {
         FrameDetected = false;
 
         // Check if film still present (auto stop at end of reel)
-        //if (AutoStopEnabled && NoFilmDetected) {
-    if (AutoStopEnabled && millis() > TractionSwitchTimeLimit) {
+        if (AutoStopEnabled && NoFilmDetected) {
             SendToRPi(RSP_SCAN_ENDED, 0, 0);
             return(SCAN_TERMINATION_REQUESTED);
+        } else {
+        bool currentSwitch = digitalRead(TractionStopPin);
+        unsigned long now = millis();
+        if (currentSwitch != switchStateBackup) {
+                        switchStateBackup = currentSwitch;
+                        lastSwitchChange = now;
+                        switchTimeoutSent = false;
+        } else if (!switchTimeoutSent && (now - lastSwitchChange >= (unsigned long)MaxFilmStallTime)) {
+                        switchTimeoutSent = true;
+            SendToRPi(RSP_SCAN_ENDED, 0, 0);
+            return (SCAN_TERMINATION_REQUESTED);
         }
+    }
 
         //-------------ScanFilm-----------
         FrameDetected = IsHoleDetected();
