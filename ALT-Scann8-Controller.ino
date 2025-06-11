@@ -185,7 +185,7 @@ unsigned long StartPictureSaveTime = 0; // Time at which we tell RPi to save cur
 unsigned long FilmDetectedTime = 0; // Updated when film is present (relevant PT variation)
 bool NoFilmDetected = true;
 bool EndScanNotificationSent = false; // Used to avoid sending multiple times the end of scan notification
-int MaxFilmStallTime = 6000; // Maximum time film can be undetected to report end of reel
+int MaxFilmStallTime = 10000; // Maximum time film can be undetected to report end of reel
 
 unsigned long lastSwitchChange = 0;
 bool switchStateBackup = true;
@@ -485,12 +485,12 @@ digitalWrite(MotorC_Stepper, LOW);
                         ScanState = Sts_Scan;
                         StartFrameTime = micros();
                         ScanSpeedDelay = OriginalScanSpeedDelay;
+                        FilmDetectedTime = millis() + MaxFilmStallTime; // RESETTA IL TIMER QUI!
                         DebugPrint("Save t.",StartFrameTime-StartPictureSaveTime);
                         DebugPrintStr(">Next fr.");
                         // Also send, if required, to RPi autocalculated threshold level every frame
                         // Alternate reports for each value, otherwise I2C has I/O errors
-                        if (PT_Level_Auto || Frame_Steps_Auto)
-                            
+                        if (PT_Level_Auto || Frame_Steps_Auto)                           
                             SendToRPi(RSP_REPORT_AUTO_LEVELS, PerforationThresholdLevel, MinFrameSteps+FrameDeductSteps);
                         break;
                     case CMD_SET_REGULAR_8:  // Select R8 film
@@ -845,12 +845,12 @@ boolean film_detected(int pt_value)
     int instant_variance;
     static unsigned long time_to_renew_minmax = 0;
     unsigned long CurrentTime = millis();
-    int minmax_validity_time = 2000; // Renew min max values every two seconds
+    int minmax_validity_time = 3000; // Renew min max values every three seconds
 
     if (CurrentTime > time_to_renew_minmax || time_to_renew_minmax - CurrentTime > minmax_validity_time) {
-      time_to_renew_minmax = CurrentTime + minmax_validity_time;
-      max_value = MinPT;
-      min_value = MaxPT;
+          time_to_renew_minmax = CurrentTime + minmax_validity_time;
+          max_value = pt_value;
+          min_value = pt_value;
     }
     max_value = max(max_value, pt_value);
     min_value = min(min_value, pt_value);
@@ -1086,9 +1086,15 @@ ScanResult scan(int UI_Command) {
             lastSwitchChange = now;
             switchTimeoutSent = false;
         } else if (!switchTimeoutSent && (now - lastSwitchChange >= (unsigned long)MaxFilmStallTime)) {
-            switchTimeoutSent = true;
-            SendToRPi(RSP_SCAN_ENDED, 0, 0);
-            return (SCAN_TERMINATION_REQUESTED);
+            bool isFilmSlack = !currentSwitch; 
+
+            if (isFilmSlack) {
+                switchTimeoutSent = true;
+                SendToRPi(RSP_SCAN_ENDED, 0, 0);
+                return (SCAN_TERMINATION_REQUESTED);
+            } else {
+                lastSwitchChange = now;
+            }
         }
 
         //-------------ScanFilm-----------
