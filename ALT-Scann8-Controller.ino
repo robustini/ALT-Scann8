@@ -101,7 +101,7 @@ int UI_Command;
 #define RSP_SCAN_ENDED 88
 #define RSP_FILM_FORWARD_ENDED 89
 #define RSP_ADVANCE_FRAME_FRACTION 90
-
+#define DEBOUNCE_DELAY 50
 
 // Immutable values
 #define S8_HEIGHT  4.01
@@ -469,6 +469,7 @@ digitalWrite(MotorC_Stepper, LOW);
                         analogWrite(11, UVLedBrightness); // Turn on UV LED
                         UVLedOn = true;
                         FilmDetectedTime = millis() + MaxFilmStallTime;
+						lastSwitchChange = millis();
                         NoFilmDetected = false;
                         EndScanNotificationSent = false; // Prevent sending multiple times
                         scan_process_ongoing = true;
@@ -1081,20 +1082,29 @@ ScanResult scan(int UI_Command) {
         // 2. Fallback check based on Traction Switch Timeout (SEMPRE ATTIVO)
         bool currentSwitch = digitalRead(TractionStopPin);
         unsigned long now = millis();
-        if (currentSwitch != switchStateBackup) {
-            switchStateBackup = currentSwitch;
-            lastSwitchChange = now;
-            switchTimeoutSent = false;
-        } else if (!switchTimeoutSent && (now - lastSwitchChange >= (unsigned long)MaxFilmStallTime)) {
-            bool isFilmSlack = !currentSwitch; 
+
+        if (currentSwitch != switchStateBackup) {  
+            if (now - lastSwitchChange > DEBOUNCE_DELAY) {  
+                switchStateBackup = currentSwitch;
+                lastSwitchChange = now;
+                switchTimeoutSent = false;
+            }
+        } 
+        else if (!switchTimeoutSent && (now - lastSwitchChange >= (unsigned long)MaxFilmStallTime)) {
+            bool isFilmSlack = !currentSwitch;
 
             if (isFilmSlack) {
                 switchTimeoutSent = true;
                 SendToRPi(RSP_SCAN_ENDED, 0, 0);
                 return (SCAN_TERMINATION_REQUESTED);
-            } else {
+            } 
+            else {
                 lastSwitchChange = now;
             }
+        }
+
+        if (!NoFilmDetected) {
+            lastSwitchChange = millis();
         }
 
         //-------------ScanFilm-----------
