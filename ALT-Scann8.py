@@ -6176,7 +6176,7 @@ def create_widgets():
         if ColorCodedButtons:
             auto_color_btn.config(selectcolor="pale green")
         auto_color_btn.grid(row=exp_wb_row, column=0, columnspan=2, sticky="WE", padx=x_pad, pady=y_pad)
-        as_tooltips.add(auto_color_btn, "Attiva o disattiva la correzione colore automatica.")
+        as_tooltips.add(auto_color_btn, "Toggle automatic color correction.")
 
 
         auto_color_strength_spinbox = DynamicSpinbox(exp_wb_frame, width=4, from_=0.0, to=1.5, increment=0.1,
@@ -6185,7 +6185,7 @@ def create_widgets():
                                                      state=DISABLED)
         auto_color_strength_spinbox.widget_type = "control"
         auto_color_strength_spinbox.grid(row=exp_wb_row, column=2, padx=x_pad, pady=y_pad, sticky=W)
-        as_tooltips.add(auto_color_strength_spinbox, "Modula l'intensità della correzione colore. 1.0 è l'effetto pieno, 0.0 è nessun effetto.")
+        as_tooltips.add(auto_color_strength_spinbox, "Modulates the intensity of color correction. 1.0 is full effect, 0.0 is no effect.")
 
         exp_wb_row += 1
 
@@ -6202,7 +6202,7 @@ def create_widgets():
                                                   state=DISABLED)
         auto_color_gamma_spinbox.widget_type = "control"
         auto_color_gamma_spinbox.grid(row=exp_wb_row, column=2, padx=x_pad, pady=y_pad, sticky=W)
-        as_tooltips.add(auto_color_gamma_spinbox, "Regola i mezzi-toni. >1.0 schiarisce, <1.0 scurisce.")
+        as_tooltips.add(auto_color_gamma_spinbox, "Adjusts half tones. >1.0 brightens, <1.0 darkens.")
 
         exp_wb_row += 1
 
