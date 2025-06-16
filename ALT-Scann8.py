@@ -20,9 +20,9 @@ __copyright__ = "Copyright 2022-25, Juan Remirez de Esparza"
 __credits__ = ["Juan Remirez de Esparza"]
 __license__ = "MIT"
 __module__ = "ALT-Scann8"
-__version__ = "1.20.05"
-__date__ = "2025-06-04"
-__version_highlight__ = "Allow to set a different frame number by double clicking on the number in the UI"
+__version__ = "1.20.07"
+__date__ = "2025-06-07"
+__version_highlight__ = "Add file save menu. Corrected end of film detection for VFD."
 __maintainer__ = "Juan Remirez de Esparza"
 __email__ = "jremirez@hotmail.com"
 __status__ = "Development"
@@ -183,7 +183,7 @@ disk_space_error_to_notify = False
 ArduinoTrigger = 0
 last_frame_time = 0
 last_steps_time = 0
-reference_inactivity_delay = 6  # Max time (in sec) we wait for next frame. If expired, we force next frame again
+reference_inactivity_delay = 10  # Max time (in sec) we wait for next frame. If expired, we force next frame again
 max_inactivity_delay = reference_inactivity_delay
 # Minimum number of steps per frame, to be passed to Arduino
 MinFrameStepsS8 = 290
@@ -576,6 +576,7 @@ def cmd_app_emergency_exit():
     if confirm:
         exit_app(False)
 
+
 def cmd_app_standard_exit():
     exit_app(True)
 
@@ -716,9 +717,12 @@ def adjust_focus_zoom():
     if not SimulatedRun and not CameraDisabled:
         camera.set_controls({"ScalerCrop": (int(FocusZoomPosX * ZoomSize[2]), int(FocusZoomPosY * ZoomSize[3])) +
                                            (int(FocusZoomFactorX * ZoomSize[2]), int(FocusZoomFactorY * ZoomSize[3]))})
+
+
 def cmd_toggle_focus_peaking():
     global FocusPeakingEnabled, focus_peaking_enabled_var
     FocusPeakingEnabled = focus_peaking_enabled_var.get()
+
 
 def cmd_set_focus_up():
     global FocusZoomPosY
@@ -1014,7 +1018,6 @@ def cmd_settings_popup_accept():
     options_dlg.grab_release()
     options_dlg.destroy()
 
-
 def cmd_settings_popup():
     global options_dlg, win
     global ExpertMode, ExperimentalMode, PlotterEnabled, UIScrollbars, DetectMisalignedFrames, MisalignedFrameTolerance, FontSize, DisableToolTips
@@ -1145,7 +1148,13 @@ def cmd_settings_popup():
     # File format (JPG or PNG)
     # Drop down to select file type
     # Dropdown menu options
-    file_type_list = ["jpg", "png", "dng"]
+    # ####################################################################
+    # ## INIZIO MODIFICA: Aggiunto "tif" all'elenco dei formati         ##
+    # ####################################################################
+    file_type_list = ["jpg", "png", "dng", "tif"]
+    # ####################################################################
+    # ## FINE MODIFICA                                                  ##
+    # ####################################################################
     file_type_dropdown_selected = tk.StringVar()
 
     # Target file type
@@ -1199,7 +1208,6 @@ def cmd_settings_popup():
     options_dlg.wait_visibility()  # can't grab until window appears, so we wait
     options_dlg.grab_set()  # ensure all input goes to our window
     options_dlg.wait_window()  # block until window is destroyed
-
 
 def get_last_frame_popup_dismiss():
     last_frame_dlg.grab_release()
@@ -1882,7 +1890,6 @@ def capture_display_thread(queue, event, id):
     active_threads -= 1
     logging.debug("Exiting capture_display_thread")
 
-
 def capture_save_thread(queue, event, id):
     global ScanStopRequested
     global active_threads
@@ -1901,7 +1908,15 @@ def capture_save_thread(queue, event, id):
             break
         # Invert image if button selected
         is_dng = FileType == 'dng'
-        is_png = FileType == 'png'
+        # ####################################################################################
+        # ## INIZIO MODIFICA: La variabile is_png non è più necessaria qui.                 ##
+        # ## La logica ora gestisce dng vs. tutti gli altri formati immagine (jpg, png, tif)##
+        # ####################################################################################
+        # is_png = FileType == 'png' # Rimosso
+        # ####################################################################################
+        # ## FINE MODIFICA                                                                  ##
+        # ####################################################################################
+        
         # Extract info from message
         type = message[0]
         if type == REQUEST_TOKEN:
@@ -1926,6 +1941,9 @@ def capture_save_thread(queue, event, id):
                     captured_image = request.make_array('main')
             request.release()   # Release request ASAP (delay frame alignment check)
             if DetectMisalignedFrames and can_check_dng_frames_for_misalignment and hdr_idx <= 1:
+                # Ensure captured_image is a NumPy array before checking shape
+                if not hasattr(captured_image, 'shape'):
+                    captured_image = np.array(captured_image)
                 frame_centered, offset = is_frame_centered(captured_image, FilmType, threshold=MisalignedFrameTolerance)
                 offset_image.add_value(offset)
                 if AutoFineTuneEnabled:
@@ -1939,49 +1957,74 @@ def capture_save_thread(queue, event, id):
             logging.debug("Thread %i saved request DNG image: %s ms", id,
                           str(round((time.time() - curtime) * 1000, 1)))
         else:
-            # If not is_dng AND negative_image AND request: Convert to image now, and do a PIL save
+            # ####################################################################################
+            # ## INIZIO MODIFICA: Logica di salvataggio per formati standard (JPG, PNG, TIF)    ##
+            # ####################################################################################
             if type == REQUEST_TOKEN:
-                if NegativeImage:   # Warning  case
+                if NegativeImage:
                     logging.warning("Cannot reverse a PiCamera2 request, saving as captured.")
-                if hdr_idx > 1:  # Hdr frame 1 has standard filename
-                    request.save('main',
-                                 HdrFrameFilenamePattern % (frame_idx, hdr_idx, FileType))
-                else:  # Non HDR
-                    request.save('main', FrameFilenamePattern % (frame_idx, FileType))
-                    if DetectMisalignedFrames:
-                        captured_image = request.make_array('main')
+                
+                # Per i formati standard (jpg, png, tif) salviamo il 'main' stream
+                filename = ""
+                if hdr_idx > 1:
+                    filename = HdrFrameFilenamePattern % (frame_idx, hdr_idx, FileType)
+                else:
+                    filename = FrameFilenamePattern % (frame_idx, FileType)
+                
+                # Qui non possiamo applicare opzioni di compressione TIF perché usiamo request.save
+                request.save('main', filename)
+                
+                if DetectMisalignedFrames and hdr_idx <= 1:
+                    captured_image = request.make_array('main')
                 request.release()
                 logging.debug("Thread %i saved request image: %s ms", id,
                               str(round((time.time() - curtime) * 1000, 1)))
-            else:
-                if hdr_idx > 1:  # Hdr frame 1 has standard filename
-                    logging.debug("Saving HDR frame n.%i", hdr_idx)
-                    captured_image.save(
-                        HdrFrameFilenamePattern % (frame_idx, hdr_idx, FileType), quality=95)
+            else: # type == IMAGE_TOKEN
+                # Qui abbiamo un oggetto Immagine di Pillow, possiamo personalizzare il salvataggio
+                filename = ""
+                if hdr_idx > 1:
+                    filename = HdrFrameFilenamePattern % (frame_idx, hdr_idx, FileType)
                 else:
-                    captured_image.save(FrameFilenamePattern % (frame_idx, FileType),
-                                        quality=95)
-                    # Once the PIL Image has been saved, convert it to an array, as expected by is_frame_centered
-                    captured_image = np.array(captured_image)
+                    filename = FrameFilenamePattern % (frame_idx, FileType)
+                    
+                # Definiamo le opzioni di salvataggio
+                save_options = {}
+                if FileType == 'jpg':
+                    save_options = {'quality': 95}
+                elif FileType == 'tif':
+                    save_options = {'compression': 'tiff_lzw'}
+                # Nessuna opzione specifica per PNG, usa i default di Pillow
+
+                captured_image.save(filename, **save_options)
+                
+                # Una volta salvata, convertiamo in array per il controllo del disallineamento
+                captured_image = np.array(captured_image)
                 logging.debug("Thread %i saved image: %s ms", id,
                               str(round((time.time() - curtime) * 1000, 1)))
-            frame_centered, offset = is_frame_centered(captured_image, FilmType, threshold=MisalignedFrameTolerance)
-            offset_image.add_value(offset)
-            if AutoFineTuneEnabled:
-                adjust_auto_fine_tune()
-            if DetectMisalignedFrames and hdr_idx <= 1 and not frame_centered:
-                scan_error_counter += 1
-                if scan_error_total_frames_counter > 0:
-                    scan_error_counter_value.set(f"{scan_error_counter} ({scan_error_counter*100/scan_error_total_frames_counter:.1f}%)")
-                with open(scan_error_log_fullpath, 'a') as f:
-                    f.write(f"Misaligned frame, {CurrentFrame}\n")
+            
+            # La logica di controllo del disallineamento è comune e non necessita modifiche
+            if DetectMisalignedFrames and hdr_idx <= 1:
+                if not hasattr(captured_image, 'shape'):
+                    captured_image = np.array(captured_image)
+                frame_centered, offset = is_frame_centered(captured_image, FilmType, threshold=MisalignedFrameTolerance)
+                offset_image.add_value(offset)
+                if AutoFineTuneEnabled:
+                    adjust_auto_fine_tune()
+                if not frame_centered:
+                    scan_error_counter += 1
+                    if scan_error_total_frames_counter > 0:
+                        scan_error_counter_value.set(f"{scan_error_counter} ({scan_error_counter*100/scan_error_total_frames_counter:.1f}%)")
+                    with open(scan_error_log_fullpath, 'a') as f:
+                        f.write(f"Misaligned frame, {CurrentFrame}\n")
             logging.debug("Thread %i after checking misaligned frames", id)
+            # ####################################################################################
+            # ## FINE MODIFICA                                                                  ##
+            # ####################################################################################
         aux = time.time() - curtime
         total_wait_time_save_image += aux
         time_save_image.add_value(aux)
     active_threads -= 1
     logging.debug("Exiting capture_save_thread n.%i", id)
-
 
 def disable_canvas(canvas):
     """Disables the canvas by graying it out and preventing interaction."""
@@ -1997,6 +2040,7 @@ def enable_canvas(canvas):
     canvas.unbind("<Button-1>")  # Re-enable clicks
     canvas.bind("<Button-1>", cmd_plotter_canvas_click)
     # Re-enable other relevant events
+
 
 def draw_preview_image(preview_image, curframe, idx):
     global total_wait_time_preview_display, PreviewModuleValue, preview_image_id_to_delete, IsSplashDisplayed, RealTimeZoom, ZoomSize, RealTimeDisplay
@@ -2023,7 +2067,7 @@ def draw_preview_image(preview_image, curframe, idx):
                 combined_rgb = cv2.cvtColor(combined, cv2.COLOR_BGR2RGB)
                 preview_image = Image.fromarray(combined_rgb)
             except Exception as e:
-                print(f"[DEBUG] Focus assist error: {e}")
+                logging.debug(f"Focus assist error: {e}")
         if idx == 0 or (idx == 2 and not HdrViewX4Active):
             # Resiz image to fit canvas. Need to add 4 to each, otherwise there is a canvas cap not covered.
             preview_image = preview_image.resize((PreviewWidth, PreviewHeight))
@@ -2056,6 +2100,7 @@ def draw_preview_image(preview_image, curframe, idx):
     total_wait_time_preview_display += aux
     time_preview_display.add_value(aux)
     logging.debug("Display preview image: %s ms", str(round((time.time() - curtime) * 1000, 1)))
+
 
 def cmd_capture_single_step():
     if not SimulatedRun:
@@ -2147,8 +2192,9 @@ def cmd_set_negative_image():
     NegativeImage = negative_image.get()
     ConfigData["NegativeCaptureActive"] = NegativeImage
 
+
 def update_real_time_display():
-    global RealTimeDisplay, ZoomSize, FocusViewEnabled, ScanOngoing
+    global RealTimeDisplay, ZoomSize
     if RealTimeDisplay:
         if not SimulatedRun and not CameraDisabled:
             # Capture frame-by-frame
@@ -2194,7 +2240,7 @@ def update_real_time_display():
                     draw_outlined_text(draw, text_position, score_text, fill="yellow", outline_color="black", font=font)
 
                 except Exception as e:
-                    print(f"[DEBUG] RealTime Focus assist error: {e}")
+                    logging.debug(f"RealTime Focus assist error: {e}")
 
             # Resize image, match canvas size (need to increase a bit to prevent gaps)
             image = image.resize((PreviewWidth+4, PreviewHeight+4), Image.LANCZOS)
@@ -2213,13 +2259,14 @@ def update_real_time_display():
         # Restore the saved locale
         locale.setlocale(locale.LC_NUMERIC, saved_locale)
         draw_capture_canvas.config(highlightthickness=0, highlightbackground=default_canvas_bg_color)
-        
+
+
 def draw_outlined_text(draw, position, text, fill, outline_color, font):
-    """Draws text with a thicker, more prominent outline."""
+    #Draws text with a thicker, more prominent outline.
     x, y = position
     outline_thickness = 2  # Aumentiamo lo spessore del bordo
 
-    # Disegna il contorno in tutte le direzioni (incluse le diagonali)
+    # Draws the outline in all directions (including diagonals)
     draw.text((x - outline_thickness, y - outline_thickness), text, font=font, fill=outline_color)
     draw.text((x + outline_thickness, y - outline_thickness), text, font=font, fill=outline_color)
     draw.text((x - outline_thickness, y + outline_thickness), text, font=font, fill=outline_color)
@@ -2229,8 +2276,9 @@ def draw_outlined_text(draw, position, text, fill, outline_color, font):
     draw.text((x, y - outline_thickness), text, font=font, fill=outline_color)
     draw.text((x, y + outline_thickness), text, font=font, fill=outline_color)
 
-    # Disegna il testo principale sopra il contorno
+    # Draw the main text above the outline
     draw.text(position, text, font=font, fill=fill)
+
 
 # Function to enable 'real-time' view on main window
 # Not a direct video feed from PiCamera2 but images capured an displayed sequentially
@@ -2255,11 +2303,12 @@ def cmd_set_real_time_display():
     # Do not allow scan to start while PiCam2 preview is active
     widget_enable(start_btn, not RealTimeDisplay)
     if not RealTimeDisplay:
-        # Questa logica di reset è ancora corretta e necessaria
+        # This reset logic is still correct and necessary
         focus_peaking_checkbox.deselect()
         cmd_toggle_focus_peaking()
     
     real_time_zoom_checkbox.deselect()
+
 
 def display_left_markers():
     reference_line_canvas.delete("all")
@@ -2922,9 +2971,9 @@ def capture_loop_simulated():
             time_autoexp_value.set(int(time_autoexp.get_average() * 1000) if time_autoexp.get_average() is not None else 0)
 
         if session_frames % 50 == 0 and not disk_space_available():  # Only every 50 frames (500MB buffer exist)
-            logging.error("No disk space available, stopping scan process.")
-            if ScanOngoing:
-                ScanStopRequested = True  # Stop in next capture loop
+            logging.warning("[PYTHON] Auto-Stop: Insufficient disk space.")
+        if ScanOngoing:
+            ScanStopRequested = True  # Stop in next capture loop
 
 
 def start_scan():
@@ -3000,7 +3049,7 @@ def start_scan():
         refresh_qr_code()
 
         # Invoke capture_loop a first time when scan starts
-        win.after(500, capture_loop)
+        win.after(5, capture_loop)
 
 
 def stop_scan():
@@ -3145,6 +3194,7 @@ def capture_loop():
                         frames_to_go_time_str.set(f"{(minutes_pending // 60):02}h {(minutes_pending % 60):02}m")
                 else:
                     if AutoStopEnabled and autostop_type.get() == "counter_to_zero":
+                        logging.warning("[PYTHON] Auto-Stop: Frame counter reached zero.")
                         ScanStopRequested = True  # Stop in next capture loop
                     ConfigData["FramesToGo"] = -1
                     frames_to_go_str.set('')  # clear frames to go box to prevent it stops again in next scan
@@ -3456,7 +3506,7 @@ def arduino_listen_loop():  # Waits for Arduino communicated events and dispatch
         with open(scan_error_log_fullpath, 'a') as f:
             f.write(f"No Frame detected, {CurrentFrame}, {ArduinoParam1}, {ArduinoParam2}\n")
     elif ArduinoTrigger == RSP_SCAN_ENDED:  # Scan arrived at the end of the reel
-        logging.warning("End of reel reached: Scan terminated")
+        logging.warning("[ARDUINO] Auto-Stop: End of film or mechanical failure detected.")
         ScanStopRequested = True
     elif ArduinoTrigger == RSP_REPORT_AUTO_LEVELS:  # Get auto levels from Arduino, to be displayed in UI, if auto on
         if ExpertMode:
@@ -3479,7 +3529,7 @@ def arduino_listen_loop():  # Waits for Arduino communicated events and dispatch
         FastForwardErrorOutstanding = True
         logging.warning("Received fast forward error from Arduino")
     elif ArduinoTrigger == RSP_REPORT_PLOTTER_INFO:  # Integrated plotter info
-        if PlotterEnabled:
+        if PlotterEnabled and FrameDetectMode == 'PFD':
             UpdatePlotterWindow(ArduinoParam1, ArduinoParam2)
     elif ArduinoTrigger == RSP_FILM_FORWARD_ENDED:
         logging.warning("Received film forward end from Arduino")
@@ -3521,6 +3571,7 @@ def widget_update(cmd, widget, enabled, inc):
         print(f"   *** counter {counter}")
     """
 
+
 # Updates widget disabled counter (to have a consistent state when disabled from various sources)
 def widget_enable(widget, enabled, inc=1):
     widget_update('enable', widget, enabled, inc)
@@ -3529,6 +3580,7 @@ def widget_enable(widget, enabled, inc=1):
 # Refreshes widget atatus based on counter value
 def widget_refresh(widget):
     widget_update('refresh', widget, None, 0)
+
 
 # Enable/diable/refresh widgets in predefined list of dependent widgets
 def widget_list_update(cmd, category_list):
@@ -4589,7 +4641,6 @@ def cmd_set_auto_exposure():
 
     AutoExpEnabled = AE_enabled.get()
     ConfigData["AutoExpEnabled"] = AutoExpEnabled
-
     widget_list_enable([id_AutoExpEnabled])
     exposure_spinbox.config(state='readonly' if AutoExpEnabled else NORMAL)
 
@@ -4599,17 +4650,15 @@ def cmd_set_auto_exposure():
         auto_exposure_btn.config(text="Auto Exp:")
     else:
         if KeepManualValues:
-            exposure_value.set(int(manual_exposure_value / 1000))
+            exposure_value.set(int(manual_exposure_value/1000))
         auto_exposure_btn.config(text="Exposure:")
 
     if not SimulatedRun and not CameraDisabled:
         camera.set_controls({"AeEnable": AutoExpEnabled})
-
         if KeepManualValues:
             camera.set_controls({"ExposureTime": int(manual_exposure_value)})
         elif not AutoExpEnabled:
-            exposure_us = int(exposure_value.get() * 1000)
-            camera.set_controls({"ExposureTime": exposure_us})
+            camera.set_controls({"ExposureTime": int(exposure_value.get() * 1000)})
 
 def cmd_auto_exp_wb_change_pause_selection():
     global ExposureWbAdaptPause
@@ -4633,7 +4682,7 @@ def cmd_exposure_selection():
         ConfigData["CurrentExposure"] = manual_exposure_value
 
     if not SimulatedRun and not CameraDisabled:
-        camera.controls.ExposureTime = int(aux)  # maybe will not work, check pag 26 of picamera2 specs
+        camera.set_controls({"ExposureTime": int(aux)})  # maybe will not work, check pag 26 of picamera2 specs
 
 
 def exposure_validation(new_value):
@@ -5176,6 +5225,7 @@ def destroy_widgets(container, delete_top = False):
     if delete_top:
         container.destroy()
 
+
 def create_widgets():
     global win
     global AdvanceMovie_btn
@@ -5292,6 +5342,13 @@ def create_widgets():
     # File menu
     file_menu = tk.Menu(menu_bar, tearoff=0)
     menu_bar.add_cascade(label="File", menu=file_menu)
+    file_menu.add_command(
+        label="Save settings to disk",
+        command=lambda: (
+            save_configuration_data_to_disk(),
+            tk.messagebox.showinfo("Save settings", "Settings successfully saved."))
+    )
+    file_menu.add_separator()
     file_menu.add_command(label="Exit", command=lambda: exit_app(True))
 
     # Help Menu
@@ -5402,13 +5459,13 @@ def create_widgets():
                                                 "useful mainly to focus the film.")
     bottom_area_row += 1
 
-    # Checkbox per il Focus Peaking
+    # Focus Asist checkbox
     focus_peaking_enabled_var = tk.BooleanVar(value=FocusPeakingEnabled)
     focus_peaking_checkbox = tk.Checkbutton(top_left_area_frame, text='Focus assist', height=1,
                                             variable=focus_peaking_enabled_var, onvalue=True, offvalue=False,
                                             font=("Arial", FontSize), command=cmd_toggle_focus_peaking,
                                             indicatoron=False, name='focus_peaking_checkbox',
-                                            state='disabled') # <<< MODIFICA 1: Parte disabilitato
+                                            state='disabled')
     focus_peaking_checkbox.widget_type = "general"
     if ColorCodedButtons:
         focus_peaking_checkbox.config(selectcolor="pale green")
@@ -6252,7 +6309,7 @@ def create_widgets():
         cmd_extra_steps_validation_cmd = frame_extra_steps_spinbox.register(extra_steps_validation)
         frame_extra_steps_spinbox.configure(validate="key", validatecommand=(cmd_extra_steps_validation_cmd, '%P'))
         as_tooltips.add(frame_extra_steps_spinbox, "Unconditionally advances/detects the frame n steps after/before "
-                                                   "detection (n between 0 and 30). Negative values can help if "
+                                                   "detection (n between -30 and 30). Negative values can help if "
                                                    "film gate is not correctly positioned.")
         frame_extra_steps_spinbox.bind("<FocusOut>", lambda event: cmd_frame_extra_steps_selection())
         frame_align_row += 1
@@ -6595,6 +6652,7 @@ def create_widgets():
         cmd_set_r8()
     elif FilmType == "S8":
         cmd_set_s8()
+
 
 def get_controller_version():
     if Controller_Id == 0:
