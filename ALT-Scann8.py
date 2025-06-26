@@ -118,7 +118,8 @@ except ImportError :
 
 win =None 
 as_tooltips =None 
-ExitingApp =False 
+ExitingApp =False
+zoom_start_stop_btn =None
 Controller_Id =0 
 Controller_full_version ="Unknown"
 FocusState =True 
@@ -667,6 +668,23 @@ import numpy as np
 import cv2 
 from PIL import Image 
 
+def update_start_stop_buttons_state(state):
+    global start_btn, zoom_start_stop_btn, save_bg, save_fg, ScanOngoing
+    if state == 'stop':
+        text = "STOP Scan"
+        bg = 'red'
+        fg = 'white'
+        relief = SUNKEN
+    else:
+        text = "START Scan"
+        bg = save_bg
+        fg = save_fg
+        relief = RAISED
+    if start_btn is not None and start_btn.winfo_exists():
+        start_btn.config(text=text, bg=bg, fg=fg, relief=relief)
+    if zoom_start_stop_btn is not None and zoom_start_stop_btn.winfo_exists():
+        zoom_start_stop_btn.config(text=text, bg=bg, fg=fg, relief=relief)
+
 def cmd_toggle_auto_color_feature ():
     is_enabled =AutoColorRestoreEnabled .get ()
 
@@ -966,12 +984,9 @@ def cmd_set_focus_minus ():
         FocusZoomFactorY )
 
 def open_zoom_preview ():
-    """
-    Apre una finestra Toplevel autonoma e stabile per la preview ingrandita.
-    Versione definitiva con layout del pulsante corretto.
-    """
     global zoom_preview_window 
     global win ,FontSize ,ConfigData ,FilmType ,latest_preview_image 
+    global zoom_start_stop_btn
 
     if zoom_preview_window is not None and zoom_preview_window .winfo_exists ():
         zoom_preview_window .lift ()
@@ -993,18 +1008,27 @@ def open_zoom_preview ():
     currently_displayed_image =None 
 
     def on_zoom_win_close ():
-        global zoom_preview_window 
+        global zoom_preview_window, zoom_start_stop_btn
         ConfigData ['ZoomPreviewPos']=zoom_preview_window .geometry ()
         save_configuration_data_to_disk ()
         zoom_preview_window .destroy ()
         zoom_preview_window =None 
+        zoom_start_stop_btn = None
 
     zoom_preview_window .protocol ("WM_DELETE_WINDOW",on_zoom_win_close )
 
     main_frame =tk .Frame (zoom_preview_window ,highlightbackground ="#0078D7",highlightthickness =2 ,bd =0 )
     main_frame .pack (fill ='both',expand =True )
 
-    tk .Button (main_frame ,text ='Close',font =("Arial",FontSize ),command =on_zoom_win_close ).pack (side =tk .BOTTOM ,pady =5 )
+    bottom_button_frame = tk.Frame(main_frame)
+    bottom_button_frame.pack(side=tk.BOTTOM, pady=5)
+
+    scan_command = cmd_start_scan_simulated if SimulatedRun else start_scan
+
+    zoom_start_stop_btn = tk.Button(bottom_button_frame, text='Start Scan', font=("Arial", FontSize), command=scan_command)
+    zoom_start_stop_btn.pack(side=tk.LEFT, padx=10)
+    
+    tk.Button(bottom_button_frame, text='Close', font=("Arial", FontSize), command=on_zoom_win_close).pack(side=tk.LEFT, padx=10)
 
     canvas =tk .Canvas (main_frame ,bg ='dark grey',highlightthickness =0 )
     canvas .pack (side =tk .TOP ,fill ='both',expand =True )
@@ -1042,6 +1066,7 @@ def open_zoom_preview ():
 
         zoom_preview_window .after (50 ,update_zoom_window )
 
+    update_start_stop_buttons_state('stop' if ScanOngoing else 'start')
     update_zoom_window ()
 
 def draw_preview_image (preview_image ,curframe ,idx ):
@@ -2904,7 +2929,7 @@ def cmd_start_scan_simulated ():
             "scan simulation.")
             return 
 
-        start_btn .config (text ="STOP Scan",bg ='red',fg ='white',relief =SUNKEN )
+        update_start_stop_buttons_state('stop')
         ConfigData ["CurrentDate"]=str (datetime .now ())
         ConfigData ["CurrentDir"]=CurrentDir 
         ConfigData ["CurrentFrame"]=str (CurrentFrame )
@@ -2945,7 +2970,7 @@ def stop_scan_simulated ():
     global win 
     global ScanOngoing 
 
-    start_btn .config (text ="START Scan",bg =save_bg ,fg =save_fg ,relief =RAISED )
+    update_start_stop_buttons_state('start')
 
     ScanOngoing =False 
     custom_spinboxes_kbd_lock (win )
@@ -3066,7 +3091,7 @@ def start_scan ():
             tk .messagebox .showerror ("Error!","Please specify target folder where captured frames will be stored.")
             return 
 
-        start_btn .config (text ="STOP Scan",bg ='red',fg ='white',relief =SUNKEN )
+        update_start_stop_buttons_state('stop')
         ConfigData ["CurrentDate"]=str (datetime .now ())
         ConfigData ["CurrentDir"]=CurrentDir 
         ConfigData ["CurrentFrame"]=str (CurrentFrame )
@@ -3116,7 +3141,7 @@ def stop_scan ():
     global ScanOngoing 
 
     if ScanOngoing :
-        start_btn .config (text ="START Scan",bg =save_bg ,fg =save_fg ,relief =RAISED )
+        update_start_stop_buttons_state('start')
 
     ScanOngoing =False 
     custom_spinboxes_kbd_lock (win )
